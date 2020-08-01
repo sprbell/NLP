@@ -1,0 +1,276 @@
+#Class 1: World
+#Class 2: Sports
+#Class 3: Business
+#——————————————————————————load data——————————————————————————#
+# Data-Task 2
+data2_train=pd.read_csv('./data_topic/train.csv',header=None,names=["label","text"])
+data2_dev=pd.read_csv('./data_topic/dev.csv',header=None,names=["label","text"])
+data2_test=pd.read_csv('./data_topic/test.csv',header=None,names=["label","text"])
+
+# label into array
+data2_train_x_raw,data2_train_y=creat_list_array(data2_train['text'],data2_train['label']) #len 2400
+data2_dev_x_raw,data2_dev_y=creat_list_array(data2_dev['text'],data2_dev['label']) #len 150
+data2_test_x_raw,data2_test_y=creat_list_array(data2_test['text'],data2_test['label']) #len 900
+
+# lower data
+def lower_F(data):
+    lower_list=[]
+    for i in range(len(data)):
+        lower_data=str.lower(data[i])
+        lower_list.append(lower_data)
+    return lower_list
+
+data2_train_x=lower_F(data2_train_x_raw)
+data2_dev_x=lower_F(data2_dev_x_raw)
+data2_test_x=lower_F(data2_test_x_raw)
+
+data2_train.head()
+
+#——————————————————————————extract vocab——————————————————————————#
+# extract vocab, df——train, train token data
+vocab_2,df_tr_2,ngrams_without_Ded_tr_2=get_vocab(data2_train_x,ngram_range=(1,3),  
+                                                  min_df=0,keep_topN=5000, stop_words=stop_words)
+# extract dev token
+ngrams_without_Ded_dev_2=extract_ngrams_for_test(data2_dev_x,ngram_range=(1,3),stop_words=stop_words)
+# extract test token
+ngrams_without_Ded_test_2=extract_ngrams_for_test(data2_test_x,ngram_range=(1,3),stop_words=stop_words)
+
+# example
+print(len(vocab_2))
+print()
+#print(random.sample(vocab_2,100))
+print(vocab_2[:100])
+print()
+print(df_tr_2[:10])
+
+#——————————————————————————Vectorise documents——————————————————————————#
+# 1. Create a dictionary of tf for train, dev, test data based on vocab_2
+tf_dict_tr2=create_tf_dict(ngrams_without_Ded_tr_2,vocab_2) #len 2400
+tf_dict_dev2=create_tf_dict(ngrams_without_Ded_dev_2,vocab_2) #len 150
+tf_dict_test2=create_tf_dict(ngrams_without_Ded_test_2,vocab_2) #len 900
+
+# 2. Extract the idf of each word based on the training set data
+idf_dict_tr_2=creat_idf(df_tr_2,tf_dict_tr2)
+
+# idf example
+print(list(idf_dict_tr_2.items())[:5])
+
+# 3. Count vectors and tf.idf vectors
+tf_vect_tr_2,idf_vect_tr_2=vectorise(tf_dict_tr2,vocab_2,idf_dict_tr_2) #train (2400,5000)
+tf_vect_dev_2,idf_vect_dev_2=vectorise(tf_dict_dev2,vocab_2,idf_dict_tr_2) #dev (150,5000)
+tf_vect_test_2,idf_vect_test_2=vectorise(tf_dict_test2,vocab_2,idf_dict_tr_2) #test (900,5000)
+
+# tf vector example
+tf_vect_tr_2[:2,:50]
+
+# tfidf vector example
+idf_vect_tr_2[:2,:50]
+
+#——————————————————————————Multi-class Logistic Regression——————————————————————————#
+# 1. Create softmax function
+def softmax(z):
+    return (np.exp(z).T/np.sum(np.exp(z),axis=1)).T
+    
+# 2. Create functions that get predicted probability and predicted class for multi-class
+def predict_prob_class_task2(X, weights):
+    z=X@weights.T
+    pred_prob_1=softmax(z)
+    pred_prob=np.squeeze(pred_prob_1,axis = None)
+    # get predicted class result
+    pred_result_list=[]
+    for i in range(pred_prob.shape[0]):
+        max_index=np.argmax(pred_prob[i])
+        pred_result_list.append(max_index+1)
+        pred_result=np.array(pred_result_list)
+    return pred_prob,pred_result
+    
+# predict example
+X = np.array([[0.1,0.2],[0.2,0.1],[0.1,-0.2]])
+w = np.array([[2,-5],[-5,2]])
+
+example_prob,example_class=predict_prob_class_task2(X, w)
+print(example_prob)
+print()
+print('predict class:',example_class)
+
+# 3. Compute the categorical cross entropy loss
+# convert a single-column y matrix containing three results into a three-column matrix of 0 and 1
+def convert_to_one_hot(array,class_num):
+    a=np.eye(class_num+1)[array]
+    return np.delete(a,0,axis=1)
+    
+# calculate loss
+def categorical_loss(X, Y, weights, num_classes=3, alpha=0.00001):
+    # get predicted probability and class
+    pred_y_prob,pred_y_class = predict_prob_class_task2(X,weights=weights)
+    Y_array=convert_to_one_hot(Y,class_num=num_classes) #Y shape (2400,3)
+    # Calculating the total number of data
+    m=Y.shape[0]
+    # loss
+    loss=(-1/m)*np.sum(Y_array*np.log(pred_y_prob))
+    # L2 regularization
+    l2_regularization_cost_2 = (alpha/2)*(np.sum(np.square(weights)))
+    return loss+l2_regularization_cost_2
+    
+# 4. Create stochastic gradient descent (SGD) function for multi-class logistic regression
+def SGD_multi_class(X_tr,Y_tr,X_dev,Y_dev,num_classes,lr,alpha,epochs,tolerance,print_progress=True):
+    cur_loss_tr = 1.
+    cur_loss_dev = 1.
+    training_loss_history = []
+    validation_loss_history = []
+    
+    # defult setting weights
+    weights_2=np.zeros([3,X_tr.shape[1]]) #(3,5000)
+    # start iteration
+    for i in range(epochs):
+        # compute current dev loss
+        cur_loss_dev=categorical_loss(X_dev,Y_dev,weights_2,num_classes=num_classes,alpha=alpha)
+        if print_progress==True:
+            validation_loss_history.append(cur_loss_dev) 
+        # shuffle train dataset
+        X_tr_ran,Y_tr_ran=randmoise_data(X_tr, Y_tr)
+        # one hot y
+        Y_tr_ran_one=convert_to_one_hot(Y_tr_ran,class_num=num_classes)
+        # update weights
+        for n in range(len(X_tr)):
+            # Add a dimension to the x_train matrix (5000,)->(5000,1)
+            x=np.expand_dims(X_tr_ran[n], axis=1) #(5000,1)
+            # get predicted probability
+            pred_prob,pred_class=predict_prob_class_task2(x.T,weights_2)
+            # compute (yi - p(y))
+            y=Y_tr_ran_one[n]-pred_prob #(3,)
+            # Add a dimension to the y matrix (3,)->(3,1)
+            y1=np.expand_dims(y, axis=1) #(3,1)
+            # dw = - (x * (yi - p(y)))
+            dw=(-1)*(x*y1.T) #(5000,3)
+            # grad = -(x * (yi - p(y))) + 2 * alpha * w
+            grad = dw.T + 2*alpha*weights_2
+            # w_new = w - lr * grad
+            weights_2=weights_2-lr*grad
+        # compute current train loss
+        cur_loss_tr=categorical_loss(X_tr_ran,Y_tr_ran,weights_2,num_classes=num_classes,alpha=alpha)
+        if print_progress==True:
+            training_loss_history.append(cur_loss_tr)
+        # Print the data of the training process
+        print('Epoch:{0}|Training Loss{1}|Validation Loss{2}'.format(i,cur_loss_tr,cur_loss_dev))
+        # if diff smaller than tolerance then break iteration
+        if i==0:
+            pass
+        else:
+            #diff = previous validation loss − current validation loss
+            diff=validation_loss_history[-2]-cur_loss_dev
+            if abs(diff)<tolerance:
+                break
+    return weights_2, training_loss_history, validation_loss_history
+    
+# 5. Creat (1) compute score, (2) print top-10 word of each class functions
+def compute_score_2(test_data,y_true,weights):
+    test_pred_prob,test_pred_result=predict_prob_class_task2(test_data,weights)
+    print('Accuracy:', accuracy_score(y_true,test_pred_result))
+    print('Precision:', precision_score(y_true,test_pred_result,average='macro'))
+    print('Recall:', recall_score(y_true,test_pred_result,average='macro'))
+    print('F1-Score:', f1_score(y_true,test_pred_result,average='macro'))
+
+# Find the top ten words of each class from vocab through the weight matrix, then store the results in the list
+def Find_top10_multi_class(vocab,w,class_num):
+    top10_list_all_class=[]
+    for i in range(class_num):
+        word_list_one_class=[]
+        for word_index in range(len(vocab)):
+            tuple_1=(vocab[word_index],w[i][word_index])
+            word_list_one_class.append(tuple_1)
+        # rank list
+        rank_list=sorted(word_list_one_class,key = lambda value: value[1],reverse=True)
+        # extract Top 10
+        top10_list=rank_list[0:10]
+        top10_list_all_class.append(top10_list)
+    return top10_list_all_class
+
+# Output the result
+def print_top10_word_multi_class(top10_list):
+    for i in range(len(top10_list)):
+        print('class {0}:'.format(i+1))
+        j = 0
+        for word in top10_list[i]:
+            print(j+1,word[0])
+            j+=1
+        print()
+        
+#——————————————————————————Train and Evaluate Multi-class Logistic Regression with TF vectors——————————————————————————#
+# 1.1 (tf_vector) Model 1——lr = 0.001, alpha = 0.001, epochs = 100
+w_count_2_M1, loss_tr_count_2_M1, dev_loss_count_2_M1 = SGD_multi_class(tf_vect_tr_2, data2_train_y, 
+                                                                         tf_vect_dev_2,data2_dev_y,
+                                                                         num_classes=3,
+                                                                         lr=0.001,  
+                                                                         alpha=0.001, 
+                                                                         epochs=100,
+                                                                         tolerance=0.0001,
+                                                                         print_progress=True)
+plt_loss(loss_tr_count_2_M1,dev_loss_count_2_M1,epochs=100)
+compute_score_2(tf_vect_test_2,data2_test_y,w_count_2_M1)
+'''
+Accuracy: 0.8644444444444445
+Precision: 0.8664826611512445
+Recall: 0.8644444444444445
+F1-Score: 0.8638351437555004
+'''
+top10_tf_2_M1=Find_top10_multi_class(vocab_2,w_count_2_M1,class_num=3)
+print_top10_word_multi_class(top10_tf_2_M1)
+
+# 1.2 (tf_vector) Model 2——lr = 0.0001, alpha = 0.001, epochs = 100
+w_count_2_M2, loss_tr_count_2_M2, dev_loss_count_2_M2 = SGD_multi_class(tf_vect_tr_2, data2_train_y, 
+                                                                         tf_vect_dev_2,data2_dev_y,
+                                                                         num_classes=3,
+                                                                         lr=0.0001,  
+                                                                         alpha=0.001, 
+                                                                         epochs=100,
+                                                                         tolerance=0.0001,
+                                                                         print_progress=True)
+plt_loss(loss_tr_count_2_M2,dev_loss_count_2_M2,epochs=100)
+compute_score_2(tf_vect_test_2,data2_test_y,w_count_2_M2)
+'''
+Accuracy: 0.8444444444444444
+Precision: 0.8479031288787336
+Recall: 0.8444444444444444
+F1-Score: 0.8433057969098279
+'''
+top10_tf_2_M2=Find_top10_multi_class(vocab_2,w_count_2_M2,class_num=3)
+print_top10_word_multi_class(top10_tf_2_M2)
+
+# 1.3 (tf_vector) Model 3——lr = 0.001, alpha = 0.01, epochs = 100
+w_count_2_M3, loss_tr_count_2_M3, dev_loss_count_2_M3 = SGD_multi_class(tf_vect_tr_2, data2_train_y, 
+                                                                         tf_vect_dev_2,data2_dev_y,
+                                                                         num_classes=3,
+                                                                         lr=0.0001,  
+                                                                         alpha=0.01, 
+                                                                         epochs=100,
+                                                                         tolerance=0.0001,
+                                                                         print_progress=True)
+plt_loss(loss_tr_count_2_M3,dev_loss_count_2_M3,epochs=100)
+compute_score_2(tf_vect_test_2,data2_test_y,w_count_2_M3)
+'''
+Accuracy: 0.84
+Precision: 0.8431190807637847
+Recall: 0.84
+F1-Score: 0.8386635667251943
+'''
+top10_tf_2_M3=Find_top10_multi_class(vocab_2,w_count_2_M3,class_num=3)
+print_top10_word_multi_class(top10_tf_2_M3)
+#——————————————————————————Train and Evaluate Multi-class Logistic Regression with TF.IDF vectors——————————————————————————#
+w_idf_2, loss_tr_idf_2, dev_loss_idf_2 = SGD_multi_class(idf_vect_tr_2, data2_train_y,  
+                                                         idf_vect_dev_2,data2_dev_y,
+                                                         num_classes=3,
+                                                         lr=0.001,  
+                                                         alpha=0.001, 
+                                                         epochs=100,
+                                                         tolerance=0.0001,
+                                                         print_progress=True)
+compute_score_2(idf_vect_test_2,data2_test_y,w_idf_2)
+'''
+Accuracy: 0.8711111111111111
+Precision: 0.8728418742503455
+Recall: 0.8711111111111111
+F1-Score: 0.870478795638847
+'''
+top10_idf_2=Find_top10_multi_class(vocab_2,w_idf_2,class_num=3)
+print_top10_word_multi_class(top10_idf_2)
