@@ -1,0 +1,580 @@
+import pandas as pd
+import numpy as np
+from collections import Counter
+import re
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import random
+from time import localtime, strftime
+from scipy.stats import spearmanr,pearsonr
+import zipfile
+import gc
+
+# fixing random seed for reproducibility
+random.seed(123)
+np.random.seed(123)
+
+#————————————————————————————————————Transform Raw texts into training and development data————————————————————————————————————#
+# 1. load data
+train_data=pd.read_csv('./data_topic/train.csv',header=None,names=["label","text"])
+dev_data=pd.read_csv('./data_topic/dev.csv',header=None,names=["label","text"])
+test_data=pd.read_csv('./data_topic/test.csv',header=None,names=["label","text"])
+train_data.head()
+
+# 2. Make the raw texts into lists and their corresponding labels into np.arrays
+def creat_list_array(data_text,data_label):
+    x=data_text.tolist()
+    y=np.array(data_label)
+    return x,y
+def lower_F(data):
+    lower_list=[]
+    for i in range(len(data)):
+        lower_data=str.lower(data[i])
+        lower_list.append(lower_data)
+    return lower_list
+
+# Transform train data
+data_train_x_raw,data_train_y=creat_list_array(train_data['text'],train_data['label']) #len 2400
+# Transform validation data
+data_dev_x_raw,data_dev_y=creat_list_array(dev_data['text'],dev_data['label']) #len 150
+# Transform test data
+data_test_x_raw,data_test_y=creat_list_array(test_data['text'],test_data['label']) #len 900
+
+# lower data
+data_train_x=lower_F(data_train_x_raw)
+data_dev_x=lower_F(data_dev_x_raw)
+data_test_x=lower_F(data_test_x_raw)
+
+# 3. Extract ngrams
+stop_words = ['a','in','on','at','and','or', 
+              'to', 'the', 'of', 'an', 'by', 
+              'as', 'is', 'was', 'were', 'been', 'be', 
+              'are','for', 'this', 'that', 'these', 'those', 'you', 'i', 'if',
+             'it', 'he', 'she', 'we', 'they', 'will', 'have', 'has',
+              'do', 'did', 'can', 'could', 'who', 'which', 'what',
+              'but', 'not', 'there', 'no', 'does', 'not', 'so', 've', 'their',
+             'his', 'her', 'they', 'them', 'from', 'with', 'its']
+
+# tokenise, create unigrams, using stop-words
+def tokenise(data,token_pattern,stop_words):
+    token_data=[]
+    token_list=re.findall(token_pattern,data)
+    for word in token_list:
+        if word not in stop_words:
+            token_data.append(word)
+    return token_data
+
+# based on the tokenised data(unigrams), create bigrams or trigrams
+def ngrams_generate(data,n):
+    result_list=[]
+    ngrams = zip(*[data[i:] for i in range(n)])
+    for ngram in ngrams:
+        result_list.append((ngram))
+    return result_list
+
+# extract ngrams function
+def extract_ngrams(x_raw,ngram_range=(1,3),token_pattern=r'\b[A-Za-z][A-Za-z]+\b',
+                   stop_words=[],vocab=set()):
+    # tokenise data
+    token_data=tokenise(x_raw,token_pattern=token_pattern,stop_words=stop_words)
+    # create ngrams list which save ngrams result
+    result_ngrams=[]
+    result_vocab=[]
+    # Extract ngrams based on the ngram_range
+    if ngram_range == 1:
+        result_ngrams = token_data
+    elif ngram_range[0]==1:
+        result_ngrams=token_data
+        for i in range(ngram_range[0],ngram_range[1]):
+            ngrams=ngrams_generate(token_data,i+1)
+            result_ngrams=result_ngrams+ngrams
+    else:
+        result_ngrams=ngrams_generate(token_data,ngram_range[0])
+        for i in range(ngram_range[0],ngram_range[1]):
+            ngrams=ngrams_generate(token_data,ngram_range[0]+1)
+            result_ngrams=result_ngrams+ngrams
+    # Extract specific vocab based on the vocab set()
+    if len(vocab)==0:
+        return result_ngrams
+    else:
+        for word in vocab:
+            if word in result_ngrams:
+                result_vocab.append(word)
+        return result_vocab
+    
+# Extract ngrams on the complete data set, for dev and test sets
+def extract_ngrams_for_test(X_data,ngram_range,stop_words=stop_words):
+    # Extract ngrams from raw data
+    ngrams_list_without_Ded=[]
+    for i in range(len(X_data)):
+        ngrams_data=extract_ngrams(X_data[i],ngram_range=ngram_range,stop_words=stop_words)
+        ngrams_list_without_Ded.append(ngrams_data)
+    return ngrams_list_without_Ded
+    
+# 4. Get vocab 
+def get_vocab(X_raw, ngram_range=(1,3), token_pattern=r'\b[A-Za-z][A-Za-z]+\b',
+              min_df=0, keep_topN=0, stop_words=[]):
+    ngrams_list = []
+    ngrams_list_without_Ded = []
+    for i in range(len(X_raw)):
+        ngrams_data=extract_ngrams(X_raw[i],ngram_range=ngram_range,stop_words=stop_words)
+        ngrams_list_without_Ded.append(ngrams_data)
+        # Deduplication
+        ngrams_data_Ded=sorted(set(ngrams_data),key=ngrams_data.index)
+        ngrams_list.append(ngrams_data_Ded)
+    
+    # create vocab dictionary
+    vocab_dict = {}
+    for i in range(len(ngrams_list)):
+        for word in ngrams_list[i]:
+            if word in vocab_dict:
+                vocab_dict[word]+=1
+            else:
+                vocab_dict[word]=1
+                
+    # keep ngrams with a minimun df
+    for word in list(vocab_dict.keys()):
+        if vocab_dict[word] < min_df:
+            del vocab_dict[word]
+    
+    # sorted then keep only topN
+    vocab_sorted=sorted(vocab_dict.items(),key=lambda item:item[1],reverse=True)
+    if keep_topN == 0:
+        vocab_topN = vocab_sorted
+    else:
+        vocab_topN = vocab_sorted[:keep_topN]
+        
+    vocab = []
+    for i in range(len(vocab_topN)):
+        vocab.append(vocab_topN[i][0])
+    return vocab,vocab_topN,ngrams_list_without_Ded
+    
+# 5. Get vocab and extract ngrams of dev and test dataset
+# extract vocab, df——train, train token data
+vocab_all,df_tr,ngrams_without_Ded_tr=get_vocab(data_train_x,ngram_range=(1),  
+                                            min_df=0,keep_topN=0, stop_words=stop_words)
+# extract dev token
+ngrams_without_Ded_dev=extract_ngrams_for_test(data_dev_x,ngram_range=(1),
+                                               stop_words=stop_words)
+# extract test token
+ngrams_without_Ded_test=extract_ngrams_for_test(data_test_x,ngram_range=(1),
+                                                stop_words=stop_words)
+# 6. Choose the first 5000 words as vocab
+vocab = vocab_all[:5000]
+print(len(vocab))
+print()
+print(random.sample(vocab,100))
+print()
+print(df_tr[:10])
+
+# 7. Get two dictionaries “id->word” and "word->id"
+def create_dict(vocab):
+    id_word_dict = {}
+    word_id_dict = {}
+    for i in range(len(vocab)):
+        id_word_dict[i] = vocab[i]
+        word_id_dict[vocab[i]] = i
+    return id_word_dict,word_id_dict
+id_word_dict,word_id_dict = create_dict(vocab)
+
+# 8. Convert the list of unigrams into a list of vocabulary indices
+def create_index(data,word_id_dict):
+    X_uni_tr = data
+    X_tr = []
+    for i in range(len(X_uni_tr)):
+        list_a = []
+        for word in X_uni_tr[i]:
+            if word in word_id_dict:
+                word_id = word_id_dict[word]
+            else:
+                pass
+            list_a.append(word_id)
+        X_tr.append(list_a)
+    return X_uni_tr,X_tr
+# represent train set
+X_uni_tr,X_tr = create_index(ngrams_without_Ded_tr,word_id_dict)
+
+# 9. Transform dev and test dataset
+X_uni_dev,X_dev = create_index(ngrams_without_Ded_dev,word_id_dict)
+X_uni_test,X_test = create_index(ngrams_without_Ded_test,word_id_dict)
+
+#————————————————————————————————————Network Training————————————————————————————————————#
+# Generate network weights
+def network_weights(vocab_size=1000, embedding_dim=300, 
+                    hidden_dim=[], num_classes=3, init_val = 0.5):
+    # Add the input variables to the same list to generate each W
+    dict_num_list = hidden_dim
+    dict_num_list.insert(0,vocab_size)
+    dict_num_list.insert(1,embedding_dim)
+    dict_num_list.append(num_classes)
+    W={}
+    for i in range(len(dict_num_list)):
+        if i == len(dict_num_list)-1:
+            break
+        else:
+            # Set the seed to ensure that the initial weight of each training will get the same result
+            np.random.seed(2020)
+            W[i] = np.random.uniform(-init_val,init_val,(dict_num_list[i],dict_num_list[i+1])).astype('float32')
+    return W
+    
+# example 1
+W = network_weights(vocab_size=5,embedding_dim=10,hidden_dim=[], num_classes=2)
+print('W_emb:', W[0].shape)
+print('W_out:', W[1].shape)
+# example 2
+W = network_weights(vocab_size=3,embedding_dim=4,hidden_dim=[2], num_classes=2)
+print('W_emb:', W[0].shape)
+print('W_h1:', W[1].shape)
+print('W_out:', W[2].shape)
+
+# Softmax
+def softmax(z):
+    sig = (np.exp(z).T/np.sum(np.exp(z),axis=1)).T
+    return sig
+    
+# Compute loss
+def categorical_loss(y, y_preds):
+    loss = -np.log(y_preds[y])
+    return loss
+
+# Example for 5 classes
+y = 2 #true label
+y_preds = softmax(np.array([[-2.1,1.,0.9,-1.3,1.5]]))[0]
+
+print('y_preds: ',y_preds)
+print('loss:', categorical_loss(y, y_preds))
+
+# Define relu and relu_derivative function
+def relu(z):
+    return np.maximum(z, 0)
+
+def relu_derivative(z):
+    return (z>0)*1
+    
+# Define dropout function
+def dropout_mask(size, dropout_rate):
+    dropout_vec = np.ones(size)
+    num = int(size*dropout_rate)
+    dropout_vec[:num] = 0
+    np.random.shuffle(dropout_vec)
+    return dropout_vec
+# example
+print(dropout_mask(10, 0.2))
+print(dropout_mask(10, 0.3))
+
+# Forward pass function
+def forward_pass(x, W, dropout_rate=0.2):
+    out_vals = {}
+    h_vecs = []
+    a_vecs = []
+    dropout_vecs = []
+    
+    # First layer
+    x_vecs = [W[0][x_num] for x_num in x]
+    h0 = np.expand_dims(1/len(x)*np.sum(x_vecs,axis = 0).T,axis = 0)
+    a0 = relu(h0)
+    d0 = dropout_mask(a0.shape[1],dropout_rate)
+    output_0 = a0*d0
+    
+    # Add h, a, dropout array to list
+    h_vecs.append(h0.squeeze())
+    a_vecs.append(a0.squeeze())
+    dropout_vecs.append(d0.squeeze())
+    
+    # If there is no hidden layer, directly pass the result to the output layer
+    if len(W) == 2:
+        y = softmax(output_0@W[1])
+    else:
+        # Calculate the hidden layer
+        output = output_0
+        for i in range(len(W)):
+            h = output@W[i+1]
+            a = relu(h)
+            d = dropout_mask(a.shape[1],dropout_rate)
+            output = a*d
+            
+            # add h, a, dropout array to list
+            h_vecs.append(h.squeeze())
+            a_vecs.append(a.squeeze())
+            dropout_vecs.append(d.squeeze())
+            
+            if i == len(W)-3:
+                break
+        y = softmax(output@W[len(W)-1])
+    
+    # output result to dictionary
+    out_vals['h'] = h_vecs
+    out_vals['a'] = a_vecs
+    out_vals['dropout_vecs'] = dropout_vecs
+    out_vals['y'] = y.squeeze()
+    return out_vals
+
+# example
+W = network_weights(vocab_size=3,embedding_dim=4,hidden_dim=[5], num_classes=2)
+ 
+for i in range(len(W)):
+    print('Shape W'+str(i), W[i].shape)
+
+print()
+print(forward_pass([2,1], W, dropout_rate=0.5))
+
+# Define one-hot function, encode input x and label y with one-hot
+def one_hot_x(x,vocab_len):
+    result = []
+    for i in range(vocab_len):
+        if i in x:
+            a = 1
+            result.append(a)
+        else:
+            a = 0
+            result.append(a)
+    result = np.expand_dims(np.array(result),axis = 1)
+    return result
+
+def one_hot_y(y,class_num):
+    a=np.eye(class_num+1)[y]
+    return np.delete(a,0,axis=0)
+
+# Backward pass function
+def backward_pass(x, y, W, out_vals,lr=0.001, freeze_emb=False):
+    W_num = len(W)
+    # vocab_size
+    vocab_size = W[0].shape[0]
+    # class_num
+    class_num = W[W_num-1].shape[1]
+    # one hot x and y
+    x_onehot = one_hot_x(x,vocab_size)
+    y_onehot = one_hot_y(y,class_num)
+    # output layer
+    p = out_vals['y']
+    # calculate current gradient
+    g = np.float32((p - y_onehot))
+    # get the input of this layer
+    out = out_vals['a'][-1]*out_vals['dropout_vecs'][-1]
+    # calculate dW
+    dw = np.dot(out.reshape([W[W_num-1].shape[0],1]),g.reshape([1,W[W_num-1].shape[1]]))
+    # calculate the gradient passed to the next layer
+    out = np.dot(W[W_num-1],g).reshape([W[W_num-1].shape[0],1])
+    # update W
+    W[W_num-1] -= lr*dw
+    
+    # If there is no hidden layer, directly calculate the gradient of the input layer
+    if W_num == 2:
+        if freeze_emb == False:
+            out = out*relu_derivative(out_vals['h'][0]).reshape([W[0].shape[1],1])
+            dw = np.dot(x_onehot,out.T)
+            W[0] -= lr*dw
+    else:
+        # Calculate the gradient of the hidden layer layer by layer, update the W of each layer
+        for i in range(W_num-2):
+            g = out*relu_derivative(out_vals['h'][W_num-2-i]).reshape(W[W_num-1-i].shape[0],1)
+            out = (out_vals['a'][W_num-3-i]*out_vals['dropout_vecs'][W_num-3-i]).reshape(W[W_num-2-i].shape[0],1)
+            dw = np.dot(out,g.T)
+            out = np.dot(W[W_num-2-i],g).reshape([W[W_num-2-i].shape[0],1])
+            W[W_num-2-i] -= lr*dw
+            
+        if freeze_emb == False:
+            out = out*relu_derivative(out_vals['h'][0]).reshape([W[0].shape[1],1])
+            dw = np.dot(x_onehot,out.T)
+            W[0] -= lr*dw
+    return W
+
+# SGD function
+# Define the calculation loss function 
+def compute_loss(data, y_true, W, dropout_rate):
+    loss_result = 0.0
+    for i in range(len(data)):
+        x = data[i]
+        prob_dict = forward_pass(x, W, dropout_rate)
+        prob_pred = prob_dict['y']
+        loss = categorical_loss(y_true[i]-1,prob_pred)
+        loss_result += loss
+        
+    return loss_result/(len(data))
+
+# Define a function to randmoise data
+def randmoise_data(data,label):
+    index=[i for i in range(len(data))]
+    data_array = np.array(data)
+    random.shuffle(index)
+    data1=data_array[index]
+    label1=label[index]
+    return data1,label1
+
+def SGD(X_tr, Y_tr, W, X_dev=[], Y_dev=[], lr=0.001, 
+        dropout=0.2, epochs=5, tolerance=0.001, freeze_emb=False, print_progress=True):
+    
+    cur_loss_tr = 1.
+    cur_loss_dev = 1.
+    training_loss_history = []
+    validation_loss_history = []
+    
+    W_curr = W
+    for i in range(epochs):
+        # compute current dev loss
+        cur_loss_dev = compute_loss(X_dev,Y_dev,W_curr,dropout_rate=dropout)
+        if print_progress==True:
+            validation_loss_history.append(cur_loss_dev) 
+            
+        # shuffle train dataset
+        X_tr_ran,Y_tr_ran = randmoise_data(X_tr,Y_tr)
+        for n in range(len(X_tr_ran)):
+            # Proceed forward pass to obtain out-vals
+            out_vals = forward_pass(X_tr_ran[n], W_curr, dropout_rate=dropout)
+            # Perform a back propagation update W
+            W_curr = backward_pass(X_tr_ran[n], Y_tr_ran[n], W_curr, out_vals,lr=lr,freeze_emb=freeze_emb)
+        # compute current train loss
+        cur_loss_tr = compute_loss(X_tr_ran, Y_tr_ran, W_curr, dropout_rate=dropout)
+        if print_progress==True:
+            training_loss_history.append(cur_loss_tr) 
+        
+        print('Epoch:{0}|Training Loss{1}|Validation Loss{2}'.format(i,cur_loss_tr,cur_loss_dev))
+        
+        # if diff smaller than tolerance then break iteration
+        if i==0:
+            pass
+        else:
+            diff=validation_loss_history[-2]-cur_loss_dev
+            if abs(diff)<tolerance:
+                break
+    return W_curr, training_loss_history, validation_loss_history
+
+#————————————————————————————————————Training Results————————————————————————————————————#
+# model 1 lr = 0.001, dropout = 0.2, epochs = 30, embedding_dim = 100
+W = network_weights(vocab_size=len(vocab),embedding_dim=100,hidden_dim=[], num_classes=3)
+
+for i in range(len(W)):
+    print('Shape W'+str(i), W[i].shape)
+
+W, tr_loss, dev_loss = SGD(X_tr, data_train_y,
+                            W,
+                            X_dev=X_dev, 
+                            Y_dev=data_dev_y,
+                            lr=0.001, 
+                            dropout=0.2,
+                            freeze_emb=False,
+                            tolerance=0.0001,
+                            epochs=30)
+# Plot the learning process and compute accuracy
+def plt_loss(y1,y2,epochs):
+    x=np.linspace(1,epochs,epochs)
+    plt.title('Training Monitoring')
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    #plt.ylim(0.2, 0.7)
+    plt.plot(x, y1, color="blue", linewidth=1.0, linestyle="-",label='training loss')
+    plt.plot(x, y2, color="red", linewidth=1.0, linestyle="-",label='validation loss')
+    plt.legend(loc='upper left', bbox_to_anchor=(0.6, 0.95))
+    plt.show()
+def compute_accuracy(W,X_test,data_test_y):
+    preds_te = [np.argmax(forward_pass(x, W, dropout_rate=0.0)['y'])+1 for x,y in zip(X_test,data_test_y)]
+    print('Accuracy:', accuracy_score(data_test_y,preds_te))
+    print('Precision:', precision_score(data_test_y,preds_te,average='macro'))
+    print('Recall:', recall_score(data_test_y,preds_te,average='macro'))
+    print('F1-Score:', f1_score(data_test_y,preds_te,average='macro'))
+
+plt_loss(tr_loss, dev_loss,30)
+compute_accuracy(W,X_test,data_test_y)
+'''
+Accuracy: 0.8133333333333334
+Precision: 0.8162914077119422
+Recall: 0.8133333333333334
+F1-Score: 0.8128399378399379
+'''
+
+# model 2 lr = 0.01, dropout = 0.2, epochs = 30, embedding_dim = 100
+W = network_weights(vocab_size=len(vocab),embedding_dim=100,hidden_dim=[], num_classes=3)
+
+for i in range(len(W)):
+    print('Shape W'+str(i), W[i].shape)
+
+W, tr_loss, dev_loss = SGD(X_tr, data_train_y,
+                            W,
+                            X_dev=X_dev, 
+                            Y_dev=data_dev_y,
+                            lr=0.01, 
+                            dropout=0.2,
+                            freeze_emb=False,
+                            tolerance=0.0001,
+                            epochs=30)
+plt_loss(tr_loss, dev_loss,30)
+compute_accuracy(W,X_test,data_test_y)
+'''
+Accuracy: 0.8355555555555556
+Precision: 0.8397842897842898
+Recall: 0.8355555555555556
+F1-Score: 0.835646535036779
+'''
+
+# model 3 lr = 0.01, dropout = 0.5, epochs = 30, embedding_dim = 100
+W = network_weights(vocab_size=len(vocab),embedding_dim=100,hidden_dim=[], num_classes=3)
+
+for i in range(len(W)):
+    print('Shape W'+str(i), W[i].shape)
+
+W, tr_loss, dev_loss = SGD(X_tr, data_train_y,
+                            W,
+                            X_dev=X_dev, 
+                            Y_dev=data_dev_y,
+                            lr=0.01, 
+                            dropout=0.5,
+                            freeze_emb=False,
+                            tolerance=0.0001,
+                            epochs=30)
+plt_loss(tr_loss, dev_loss,30)
+compute_accuracy(W,X_test,data_test_y)
+'''
+Accuracy: 0.8466666666666667
+Precision: 0.8504102504190127
+Recall: 0.8466666666666667
+F1-Score: 0.8469664091151028
+'''
+
+# model 4 lr = 0.01, dropout = 0.5, epochs = 30, embedding_dim = 200
+W = network_weights(vocab_size=len(vocab),embedding_dim=200,hidden_dim=[], num_classes=3)
+
+for i in range(len(W)):
+    print('Shape W'+str(i), W[i].shape)
+
+W, tr_loss, dev_loss = SGD(X_tr, data_train_y,
+                            W,
+                            X_dev=X_dev, 
+                            Y_dev=data_dev_y,
+                            lr=0.01, 
+                            dropout=0.5,
+                            freeze_emb=False,
+                            tolerance=0.0001,
+                            epochs=30)
+plt_loss(tr_loss, dev_loss,30)
+compute_accuracy(W,X_test,data_test_y)
+'''
+Accuracy: 0.85
+Precision: 0.8540278376428022
+Recall: 0.85
+F1-Score: 0.8501653210496564
+'''
+
+# model 5 lr = 0.01, dropout = 0.5, epochs = 50, embedding_dim = 200, hidden laryer = 100
+W = network_weights(vocab_size=len(vocab),embedding_dim=200,hidden_dim=[100], num_classes=3)
+
+for i in range(len(W)):
+    print('Shape W'+str(i), W[i].shape)
+
+W, tr_loss, dev_loss = SGD(X_tr data_train_y,
+                            W,
+                            X_dev=X_dev, 
+                            Y_dev=data_dev_y,
+                            lr=0.01, 
+                            dropout=0.5,
+                            freeze_emb=False,
+                            tolerance=0.0001,
+                            epochs=50)
+plt_loss(tr_loss, dev_loss,50)
+compute_accuracy(W,X_test,data_test_y)
+'''
+Accuracy: 0.8477777777777777
+Precision: 0.8515474712357317
+Recall: 0.8477777777777779
+F1-Score: 0.8478321194390297
+'''
+
