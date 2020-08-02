@@ -25,6 +25,23 @@ For that purpose, you will implement:
  - After training the LR models, plot the learning process (i.e. training and validation loss in each epoch) using a line plot. 
  - Model interpretability by showing the most important features for each class (i.e. most pos- itive/negative weights). Give the top 10 for each class and comment on whether they make sense. 
  
+### Data - Task 1 
+
+The data you will use for Task 1 are taken from [here](http://www.cs.cornell.edu/people/pabo/movie-review-data/) and you can find it in the `./data_sentiment` folder in CSV format:
+
+- `data_sentiment/train.csv`: contains 1,400 reviews, 700 positive (label: 1) and 700 negative (label: 0) to be used for training.
+- `data_sentiment/dev.csv`: contains 200 reviews, 100 positive and 100 negative to be used for hyperparameter selection and monitoring the training process.
+- `data_sentiment/test.csv`: contains 400 reviews, 200 positive and 200 negative to be used for testing.
+
+### Data - Task 2
+
+The data you will use for Task 2 is a subset of the [AG News Corpus](http://groups.di.unipi.it/~gulli/AG_corpus_of_news_articles.html) and you can find it in the `./data_topic` folder in CSV format:
+
+- `data_topic/train.csv`: contains 2,400 news articles, 800 for each class to be used for training.
+- `data_topic/dev.csv`: contains 150 news articles, 50 for each class to be used for hyperparameter selection and monitoring the training process.
+- `data_topic/test.csv`: contains 900 news articles, 300 for each class to be used for testing.
+ 
+ 
  # Text Classification with a Feedforward Network
  
  The goal of this assignment is to develop a Feedforward network for text classification. 
